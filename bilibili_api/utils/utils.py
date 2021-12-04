@@ -6,6 +6,7 @@ bilibili_api.utils.utils
 
 import json
 import os
+import hmac
 from typing import List, TypeVar
 
 
@@ -125,6 +126,7 @@ def crack_uid(crc32: str):
         return -1
     return str(i) + deepCheckData[1]
 
+
 def join(seperator: str, array: list):
     """
     用指定字符连接数组
@@ -136,9 +138,11 @@ def join(seperator: str, array: list):
     Returns:
         str: 连接结果
     """
-    return seperator.join(map(lambda x: str(x) ,array))
+    return seperator.join(map(lambda x: str(x), array))
+
 
 ChunkT = TypeVar('ChunkT', List, List)
+
 
 def chunk(arr: ChunkT, size: int) -> List[ChunkT]:
     if size <= 0:
@@ -158,3 +162,60 @@ def chunk(arr: ChunkT, size: int) -> List[ChunkT]:
         result.append(temp)
 
     return result
+
+
+def calc_sign(data: dict, secret_rule: list) -> str:
+    """
+    计算签名。
+
+    Args:
+        data (dict): 待签名数据
+        secret_rule (list): 密钥规则
+
+    Returns:
+        str: 签名
+    """
+    parent_id, area_id, seq_id, room_id = json.loads(data['id'])
+    buvid, uuid = json.loads(data['device'])
+    key = bytes(data['benchmark'], encoding='utf-8')
+    newData = {
+        "platform": 'web',
+        "parent_id": parent_id,
+        "area_id": area_id,
+        "seq_id": seq_id,
+        "room_id": room_id,
+        "buvid": buvid,
+        "uuid": uuid,
+        "ets": data["ets"],
+        "time": data["time"],
+        "ts": data["ts"],
+    }
+    s = json.dumps(newData).replace(" ", "")
+    for i in secret_rule:
+        if i == 0:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='MD5').hexdigest()
+            continue
+        elif i == 1:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='SHA1').hexdigest()
+            continue
+        elif i == 2:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='SHA256').hexdigest()
+            continue
+        elif i == 3:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='SHA224').hexdigest()
+            continue
+        elif i == 4:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='SHA512').hexdigest()
+            continue
+        elif i == 5:
+            s = hmac.new(key, bytes(s, encoding='utf-8'),
+                         digestmod='SHA384').hexdigest()
+            continue
+        else:
+            continue
+    return s
