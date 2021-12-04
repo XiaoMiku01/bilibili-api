@@ -13,15 +13,22 @@ import asyncio
 from typing import List
 import aiohttp
 import brotli
+import uuid
+import traceback
+import sys
+from urllib.parse import urlencode
+from collections import namedtuple
 
 from aiohttp.client_ws import ClientWebSocketResponse
+from asyncio import CancelledError
 
 from .utils.Credential import Credential
 from .utils.network import get_session, request
-from .utils.utils import get_api
+from .utils.utils import get_api, calc_sign
 from .utils.Danmaku import Danmaku
 from .utils.AsyncEvent import AsyncEvent
 from .exceptions.LiveException import LiveException
+from .exceptions.CredentialNoLiveBuvidException import CredentialNoLiveBuvidException
 
 API = get_api("live")
 
@@ -1073,3 +1080,281 @@ async def get_unlive_followers_info(page: int = 1, page_size: int = 30, credenti
         "pagesize": page_size,
     }
     return await request(api['method'], api["url"], params=params, credential=credential)
+
+
+class SmallHeartTask:
+    """
+    直播间获取小心心协议
+    """
+    RoomInfo = namedtuple('RoomInfo', 'room_id, parent_area_id, area_id')
+    headers = {
+        'Referer': 'https://live.bilibili.com',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+        'Chrome/83.0.4103.116 Safari/537.36'
+    }
+
+    def __init__(self, credential: Credential = None, debug: bool = False):
+        """
+        Args:
+            credential (Credential, optional): 登录凭证. Defaults to None.
+            debug      (bool, optional): 是否打开 debug 模式. Defaults to False.
+        """
+        if credential is None:
+            credential = Credential()
+        self.credential = credential
+        self.csrf = credential.bili_jct
+        self.uuid = uuid.uuid4()  # 唯一标识
+        self.live_buvid = credential.live_buvid
+        if not self.live_buvid:
+            raise CredentialNoLiveBuvidException()
+        self.cookie = credential.get_cookies()
+        self.MAX_HEARTS_PER_DAY = 24  # 每天最多可以获取 24 个小心心
+        self.MAX_CONCURRENT_ROOMS = self.MAX_HEARTS_PER_DAY  # 最多同时可以在 24 个直播间获取小心心
+        self.HEART_INTERVAL = 300  # 两个小心心间隔时间，单位：300秒
+        self.debug = debug
+
+        # logging
+        self.logger = logging.getLogger()
+        self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s"))
+        self.logger.addHandler(handler)
+
+    async def medals(self):
+        """
+        获取所有粉丝牌信息的迭代器
+
+        Returns:
+            dict: 粉丝牌信息
+        """
+        page = 1
+        while True:
+            data = await get_medal(page=page, credential=self.credential)
+            page_info = data['pageinfo']
+            assert page == page_info['curPage']
+
+            for medal in data['fansMedalList']:
+                yield medal
+
+            if page < page_info['totalpages']:
+                page += 1
+            else:
+                break
+
+    async def run(self):
+        """
+        获取小心心入口函数
+
+        """
+        MAX_HEARTS_PER_DAY = self.MAX_HEARTS_PER_DAY
+        self.session = session = aiohttp.ClientSession(headers=SmallHeartTask.headers, cookies=self.cookie)
+        try:
+            room_infos = []
+            count = 0
+            async for m in self.medals():
+                api_room_info = API["info"]["room_info"]
+                params = {
+                    "room_id": m['roomid'],
+                }
+                room_info = (await request(api_room_info['method'], api_room_info["url"], params=params, credential=self.credential))['room_info']
+                room_id = room_info['room_id']
+                area_id = room_info['area_id']
+                parent_area_id = room_info['parent_area_id']
+                room_info = SmallHeartTask.RoomInfo(room_id, parent_area_id, area_id)
+                if parent_area_id == 0 or area_id == 0:
+                    self.logger.error(f'Invalid room info: {room_info}')
+                    continue
+                room_infos.append(room_info)
+                count += 1
+
+                if count == self.MAX_CONCURRENT_ROOMS:
+                    break
+
+            if len(room_infos) == 0:
+                self.logger.info('一个勋章都没有~结束任务')
+                return
+
+            self.queue = queue = asyncio.Queue(MAX_HEARTS_PER_DAY)
+
+            for i in range(1, MAX_HEARTS_PER_DAY+1):
+                queue.put_nowait(i)
+
+            dispatcher = asyncio.create_task(self.dispatch(room_infos))
+
+            await queue.join()
+            self.logger.info(f'今天小心心任务已完成。')
+            return
+        except CancelledError:
+            raise
+        finally:
+            try:
+                dispatcher.cancel()
+            except Exception:
+                pass
+            try:
+                for task in self.tasks:
+                    task.cancel()
+            except Exception:
+                pass
+
+            await session.close()
+
+    async def dispatch(self, room_infos):
+        """
+        创建协程任务
+
+        Args:
+            room_infos (list): 直播间列表
+        """
+        self.tasks = tasks = []
+        for room_info in room_infos:
+            task = asyncio.create_task(self.post_heartbeats(*room_info))
+            tasks.append(task)
+            self.logger.info(f'{room_info.room_id}号直播间心跳任务开始')
+
+    async def post_heartbeats(self, room_id, parent_area_id, area_id):
+        """
+        发送心跳协程
+
+        Args:
+            room_id (int): 直播间号
+            parent_area_id (int): 父区域号
+            area_id (int): 区域号
+        """
+        session = self.session
+        csrf = self.csrf
+        buvid = self.live_buvid
+        uuid = self.uuid
+        queue = self.queue
+        while True:
+            sequence = 0
+            try:
+                result = await self.post_enter_room_heartbeat(session, csrf, buvid, uuid, room_id, parent_area_id, area_id)
+                self.logger.info(f'进入{room_id}号直播间心跳已发送。')
+                self.logger.debug(f'进入{room_id}号直播间心跳发送结果: {result}')
+                while True:
+                    sequence += 1
+                    interval = result['heartbeat_interval']
+                    self.logger.info(f'{interval}秒后发送第{sequence}个{room_id}号直播间内心跳')
+                    await asyncio.sleep(interval)
+
+                    result = await self.post_in_room_heartbeat(
+                        session, csrf, buvid, uuid,
+                        room_id, parent_area_id, area_id,
+                        sequence, interval,
+                        result['timestamp'],
+                        result['secret_key'],
+                        result['secret_rule'],
+                    )
+
+                    self.logger.info(f'第{sequence}个{room_id}号直播间内心跳已发送')
+                    self.logger.debug(f'第{sequence}个{room_id}号直播间内心跳发送结果: {result}')
+
+                    assert self.HEART_INTERVAL % interval == 0, interval
+                    heartbeats_per_heart = self.HEART_INTERVAL // interval
+
+                    if sequence % heartbeats_per_heart == 0:
+                        n = queue.get_nowait()
+                        self.logger.info(f'获得第{n}个小心心')
+                        queue.task_done()
+            except asyncio.QueueEmpty:
+                self.logger.info(f'小心心任务已完成, {room_id}号直播间心跳任务终止。')
+                break
+            except CancelledError:
+                self.logger.debug(f'{room_id}号直播间心跳任务取消')
+                raise
+            except Exception as e:
+                exc_type, exc_value, exc_obj = sys.exc_info()
+                traceback.print_tb(exc_obj)
+                if sequence == 0:
+                    self.logger.error(f'进入{room_id}号直播间心跳发送异常: {repr(e)}')
+                else:
+                    self.logger.error(f'第{sequence}个{room_id}号直播间内心跳发送异常: {repr(e)}')
+
+                delay = 60
+                self.logger.error(f'{delay}秒后重试{room_id}号直播间心跳任务')
+                await asyncio.sleep(delay)
+
+    async def post_enter_room_heartbeat(self,
+                                        session: aiohttp.ClientSession, csrf: str, buvid: str, uuid: str,
+                                        room_id: int, parent_area_id: int, area_id: int):
+        """
+        发送进入直播间心跳
+
+        Args:
+            session (aiohttp.ClientSession): session对象
+            csrf (str): csrf
+            buvid (str): buvid
+            uuid (str): uuid
+            room_id (int): 直播间号
+            parent_area_id (int): 父区域号
+            area_id (int): 区域号
+        """
+        post_enter_room_heartbeat = API["operate"]["post_enter_room_heartbeat"]
+        headers = {
+            'Referer': f'https://live.bilibili.com/{room_id}',
+            'Content-Type': 'application/x-www-form-urlencoded'
+        }
+        data = {
+            'id': f'[{parent_area_id}, {area_id}, 0, {room_id}]',
+            'device': f'["{buvid}", "{uuid}"]',
+            'ts': int(time.time()) * 1000,
+            'is_patch': 0,
+            'heart_beat': [],
+            'ua': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/80.0.3987.163 Safari/537.36',
+            'csrf_token': csrf,
+            'csrf': csrf,
+            'visit_id': '',
+        }
+        result = await session.request(method=post_enter_room_heartbeat['method'], url=post_enter_room_heartbeat['url'], data=urlencode(data), headers=headers)
+        return (await result.json()).get('data', {})
+
+    async def post_in_room_heartbeat(self,
+                                     session: aiohttp.ClientSession, csrf: str, buvid: str, uuid: str,
+                                     room_id: int, parent_area_id: int, area_id: int,
+                                     sequence: int, interval: int, ets: int,
+                                     secret_key: str, secret_rule: list):
+        """
+        发送直播间内心跳
+
+        Args:
+            session (aiohttp.ClientSession): session对象
+            csrf (str): csrf
+            buvid (str): buvid
+            uuid (str): uuid
+            room_id (int): 直播间号
+            parent_area_id (int): 父区域号
+            area_id (int): 区域号
+            sequence (int): 心跳序号
+            interval (int): 心跳间隔
+            ets (int): 心跳时间戳
+            secret_key (str): 心跳秘钥
+            secret_rule (list): 心跳秘钥规则
+        """
+        post_in_room_heartbeat = API["operate"]["post_in_room_heartbeat"]
+        headers = {
+            'Referer': f'https://live.bilibili.com/{room_id}',
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
+
+        data = {
+            'id': f'[{parent_area_id}, {area_id}, {sequence}, {room_id}]',
+            'device': f'["{buvid}", "{uuid}"]',
+            'ets': ets,
+            'benchmark': secret_key,
+            'time': interval,
+            'ts': int(time.time()) * 1000,
+            'ua': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) '
+                  'Chrome/80.0.3987.163 Safari/537.36',
+        }
+
+        data.update({
+            'csrf_token': csrf,
+            'csrf': csrf,
+            'visit_id': '',
+            's': calc_sign(data, secret_rule),
+        })
+
+        result = await session.request(method=post_in_room_heartbeat['method'], url=post_in_room_heartbeat['url'], headers=headers, data=urlencode(data))
+        return (await result.json()).get('data', {})

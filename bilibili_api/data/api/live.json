@@ -367,6 +367,42 @@
         "csrf,csrf_token": "要给两个"
       },
       "comment": "领取航海日志奖励"
+    },
+    "post_enter_room_heartbeat": {
+      "url": "https://live-trace.bilibili.com/xlive/data-interface/v1/x25Kn/E",
+      "method": "POST",
+      "verify": true,
+      "params": {
+        "id": "str: [大分区id ,小分区id ,房间id]",
+        "device": "str: 设备号",
+        "ts": "int: 时间戳",
+        "is_patch": "const int: 0",
+        "heart_beat": "const array: []",
+        "ua": "str: 浏览器UA",
+        "visit_id": "void: 空",
+        "csrf,csrf_token": "要给两个"
+      },
+      "comment": "发送进入直播间心跳"
+    },
+    "post_in_room_heartbeat": {
+      "url": "https://live-trace.bilibili.com/xlive/data-interface/v1/x25Kn/X",
+      "method": "POST",
+      "verify": true,
+      "params": {
+        "id": "str: [大分区id ,小分区id ,序列 ,房间id]",
+        "device": "str: 设备号",
+        "ets": "int: ets",
+        "benchmark": "int: 秘钥",
+        "time": "int: 时间间隔",
+        "ts": "int: 时间戳",
+        "is_patch": "const int: 0",
+        "heart_beat": "const array: []",
+        "ua": "str: 浏览器UA",
+        "visit_id": "void: 空",
+        "csrf,csrf_token": "要给两个",
+        "s": "str: 加密参数"
+      },
+      "comment": "发送直播间内心跳"
     }
   }
 }
