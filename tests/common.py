@@ -7,10 +7,11 @@ def get_credential():
     BILI_SESSDATA = os.getenv("BILI_SESSDATA")
     BILI_CSRF = os.getenv("BILI_CSRF")
     BILI_BUVID3 = os.getenv("BILI_BUVID3")
+    LIVE_BUVID = os.getenv("LIVE_BUVID")
 
     if not BILI_SESSDATA or not BILI_CSRF or not BILI_BUVID3:
         raise Exception("缺少环境变量")
-    return Credential(BILI_SESSDATA, BILI_CSRF, BILI_BUVID3)
+    return Credential(BILI_SESSDATA, BILI_CSRF, BILI_BUVID3, LIVE_BUVID)
 
 
 async def delay():
