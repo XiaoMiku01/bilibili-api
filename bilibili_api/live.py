@@ -971,6 +971,26 @@ async def get_self_dahanghai_info(page: int = 1, page_size: int = 10, credential
     return await request(api['method'], api["url"], params=params, credential=credential)
 
 
+async def get_medal(page: int = 1, page_size: int = 10, credential: Credential = None):
+    """
+    获取自己粉丝勋章墙列表
+
+    Args:
+        page (int, optional): 页码. Defaults to 1
+        page_size (int, optional): 每页数量. Defaults to 10
+    """
+    if credential is None:
+        credential = Credential()
+
+    credential.raise_for_no_sessdata()
+    api = API["info"]["get_medal"]
+    params = {
+        "page": page,
+        "page_size": page_size
+    }
+    return await request(api['method'], api["url"], params, credential=credential)
+
+
 async def get_self_bag(credential: Credential):
     """
     获取自己的直播礼物包裹信息
@@ -1013,6 +1033,7 @@ async def get_area_info():
     api = API["info"]["area_info"]
     return await request(api['method'], api["url"])
 
+
 async def get_live_followers_info(need_recommend: bool = True, credential: Credential = None):
     """
     获取关注列表中正在直播的直播间信息，包括房间直播热度，房间名称及标题，清晰度，是否官方认证等信息。
@@ -1031,6 +1052,7 @@ async def get_live_followers_info(need_recommend: bool = True, credential: Crede
         "filterRule": 0
     }
     return await request(api['method'], api["url"], params=params, credential=credential)
+
 
 async def get_unlive_followers_info(page: int = 1, page_size: int = 30, credential: Credential = None):
     """
