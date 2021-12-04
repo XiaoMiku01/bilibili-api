@@ -12,7 +12,7 @@ class Credential:
     凭据类，用于各种请求操作的验证。
     """
 
-    def __init__(self, sessdata: str = None, bili_jct: str = None, buvid3: str = None):
+    def __init__(self, sessdata: str = None, bili_jct: str = None, buvid3: str = None, live_buvid: str = None):
         """
         各字段获取方式查看：https://bili.moyu.moe/#/get-credential.md
 
@@ -20,10 +20,12 @@ class Credential:
             sessdata (str, optional):  浏览器 Cookies 中的 SESSDATA 字段值
             bili_jct (str, optional):  浏览器 Cookies 中的 bili_jct 字段值
             buvid3 (str, optional):    浏览器 Cookies 中的 BUVID3 字段值
+            live_buvid (str, optional):  浏览器 Cookies 中的 LIVE_BUVID 字段值
         """
         self.sessdata = sessdata
         self.bili_jct = bili_jct
         self.buvid3 = buvid3
+        self.live_buvid = live_buvid
 
     def get_cookies(self):
         """
