@@ -79,3 +79,29 @@ else:
 
 ```
 
+# 示例：直播间快速获取24个小心心  
+
+- 说明：此接口用了异步执行，多个直播间同时获取小心心  
+所需时间和账号拥有的**有效粉丝牌**数量有关  
+- 具体为：  
+24个以上--5分钟  
+12-23个--10分钟  
+8-11个--15分钟  
+8个以下去需要20分钟以上  
+- **有效粉丝牌指**：有正常直播间的主播的粉丝牌  
+
+```python
+from bilibili_api import live, sync, Credential
+
+SESSDATA = ""
+BILI_JCT = ""
+BUVID3 = ""
+LIVE_BUVID = ""  # 此接口特有的字段，获取方式与上方相同  
+
+# 实例化 Credential 类
+credential = Credential(sessdata=SESSDATA, bili_jct=BILI_JCT, buvid3=BUVID3, live_buvid=LIVE_BUVID)
+
+# 实例化并运行，debug 默认为 False  
+sync(live.SmallHeartTask(credential=credential, debug=True).run())
+
+```
